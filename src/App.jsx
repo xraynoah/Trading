@@ -4,7 +4,8 @@ import {
   ChevronLeft, ChevronRight, Image as ImageIcon,
   TrendingUp, TrendingDown, Target, BarChart3,
   Save, Edit3, ListChecks, Clock, Camera, Download,
-  AlertCircle, ArrowLeft, Trophy, Activity
+  AlertCircle, ArrowLeft, Trophy, Activity,
+  Sun, Moon, Zap, ClipboardCheck, Flame, CalendarCheck
 } from 'lucide-react';
 import { storage } from './storage';
 
@@ -13,9 +14,61 @@ const SESSIONS = ['Asia', 'London', 'New York', 'Overlap'];
 const MONTHS_DE = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 const DAYS_DE = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
+// Default routines - can be edited later in settings
+const DEFAULT_ROUTINES = {
+  morning: [
+    'Nachrichten-Kalender gecheckt (High-Impact News)',
+    'HTF-Bias festgelegt (Daily / 4H-Struktur)',
+    'Key Levels markiert (PDH, PDL, Wochen-High/Low, Asia-Range)',
+    'Liquidity-Zonen identifiziert',
+    'Watchlist auf 2–3 Pairs reduziert',
+    'Mentaler Check: ausgeschlafen, fokussiert',
+    'Max. Daily Loss und Daily Target definiert',
+    'Handy lautlos / Social Media aus',
+  ],
+  preTrade: [
+    'Setup passt zur Signal-Checkliste',
+    'Multi-Timeframe-Alignment bestätigt (HTF → MTF → LTF)',
+    'Entry, SL und TP vor dem Klick definiert',
+    'Risk max. 1% (oder Prop-Firm-Limit)',
+    'RRR mindestens 1:2',
+    'Keine High-Impact News in den nächsten 30 Min',
+    'Confluence vorhanden (mehr als nur ein Signal)',
+    'Ich trade das Setup – nicht den P&L oder FOMO',
+    'Tageslimit noch nicht erreicht',
+  ],
+  postTrade: [
+    'Screenshot vom Chart (Entry + Exit sichtbar)',
+    'Trade im Journal eingetragen',
+    'Signal- und Timeframe-Checkliste ausgefüllt',
+    'Emotionen beim Trade notiert',
+    'Regelbruch? Wenn ja: dokumentiert',
+    'Setup-Qualität bewertet (A+, B, C)',
+    '5 Min Pause vor dem nächsten Trade',
+  ],
+  evening: [
+    'Alle Trades im Journal komplett mit Screenshots',
+    'Tages-P&L notiert (R-Multiple + €)',
+    'Best Trade analysiert: was lief richtig?',
+    'Worst Trade analysiert: was würde ich anders machen?',
+    'Regelbrüche gezählt und dokumentiert',
+    'Learning des Tages notiert',
+    'Confidence-Level des Tages (1–10)',
+    'Charts zu – Feierabend',
+  ],
+};
+
+const ROUTINE_META = {
+  morning:   { label: 'Morning Prep',    icon: Sun,            color: 'amber',   order: 0 },
+  preTrade:  { label: 'Pre-Trade',       icon: Zap,            color: 'sky',     order: 1 },
+  postTrade: { label: 'Post-Trade',      icon: ClipboardCheck, color: 'emerald', order: 2 },
+  evening:   { label: 'Evening Review',  icon: Moon,           color: 'violet',  order: 3 },
+};
+
 // ---------- Helpers ----------
 const cn = (...c) => c.filter(Boolean).join(' ');
 const genId = () => `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+const todayISO = () => new Date().toISOString().slice(0, 10);
 
 const fmtNum = (n, d = 2) => {
   if (n === null || n === undefined || isNaN(n)) return '—';
@@ -29,6 +82,11 @@ const fmtDate = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso);
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+};
+const fmtDateShort = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
 
 async function safeGet(key) {
@@ -58,12 +116,19 @@ async function compressImage(file, maxWidth = 1200, quality = 0.7) {
   });
 }
 
+// Convert default routines (array of strings) to items with ids
+function stringsToItems(strings) {
+  return strings.map(label => ({ id: genId(), label, checked: false }));
+}
+
 // ---------- Main App ----------
 export default function TradingJournal() {
   const [view, setView] = useState('dashboard');
   const [trades, setTrades] = useState([]);
   const [signalTemplate, setSignalTemplate] = useState([]);
   const [timeframeTemplate, setTimeframeTemplate] = useState([]);
+  const [routineTemplates, setRoutineTemplates] = useState(null); // { morning, preTrade, postTrade, evening }
+  const [routineDays, setRoutineDays] = useState({}); // { '2026-04-22': { morning: [...], preTrade: [...], ... } }
   const [loading, setLoading] = useState(true);
   const [editingTrade, setEditingTrade] = useState(null);
   const [viewingTrade, setViewingTrade] = useState(null);
@@ -75,6 +140,7 @@ export default function TradingJournal() {
   useEffect(() => {
     (async () => {
       try {
+        // Trades
         const idx = await safeGet('trades-index');
         const ids = idx ? JSON.parse(idx) : [];
         const loaded = [];
@@ -85,10 +151,36 @@ export default function TradingJournal() {
         loaded.sort((a, b) => new Date(b.date) - new Date(a.date));
         setTrades(loaded);
 
+        // Trade checklists (signal/timeframe)
         const sig = await safeGet('template:signal');
         setSignalTemplate(sig ? JSON.parse(sig) : []);
         const tf = await safeGet('template:timeframe');
         setTimeframeTemplate(tf ? JSON.parse(tf) : []);
+
+        // Routine templates - seed defaults if first run
+        const rt = await safeGet('template:routines');
+        if (rt) {
+          setRoutineTemplates(JSON.parse(rt));
+        } else {
+          const seeded = {
+            morning: stringsToItems(DEFAULT_ROUTINES.morning),
+            preTrade: stringsToItems(DEFAULT_ROUTINES.preTrade),
+            postTrade: stringsToItems(DEFAULT_ROUTINES.postTrade),
+            evening: stringsToItems(DEFAULT_ROUTINES.evening),
+          };
+          setRoutineTemplates(seeded);
+          try { await storage.set('template:routines', JSON.stringify(seeded)); } catch {}
+        }
+
+        // Routine days (all)
+        const daysIdx = await safeGet('routines-index');
+        const dayKeys = daysIdx ? JSON.parse(daysIdx) : [];
+        const daysObj = {};
+        for (const k of dayKeys) {
+          const raw = await safeGet(`routine:${k}`);
+          if (raw) { try { daysObj[k] = JSON.parse(raw); } catch {} }
+        }
+        setRoutineDays(daysObj);
       } catch (e) { console.error(e); }
       finally { setLoading(false); }
     })();
@@ -136,6 +228,21 @@ export default function TradingJournal() {
     try { await storage.set('template:timeframe', JSON.stringify(items)); } catch {}
   }
 
+  async function updateRoutineTemplate(key, items) {
+    const newTemplates = { ...routineTemplates, [key]: items };
+    setRoutineTemplates(newTemplates);
+    try { await storage.set('template:routines', JSON.stringify(newTemplates)); } catch {}
+  }
+
+  async function saveRoutineDay(dateISO, day) {
+    const newDays = { ...routineDays, [dateISO]: day };
+    setRoutineDays(newDays);
+    try {
+      await storage.set(`routine:${dateISO}`, JSON.stringify(day));
+      await storage.set('routines-index', JSON.stringify(Object.keys(newDays)));
+    } catch (e) { console.error(e); }
+  }
+
   const showForm = editingTrade !== null;
   const showDetail = viewingTrade !== null;
 
@@ -172,31 +279,38 @@ export default function TradingJournal() {
           <>
             {view === 'dashboard' && (
               <DashboardView trades={trades} currentMonth={currentMonth} setCurrentMonth={setCurrentMonth}
-                onTradeClick={(t) => setViewingTrade(t)} />
+                onTradeClick={(t) => setViewingTrade(t)} routineDays={routineDays} />
+            )}
+            {view === 'routines' && (
+              <RoutinesView routineTemplates={routineTemplates} routineDays={routineDays}
+                onSaveDay={saveRoutineDay} />
             )}
             {view === 'trades' && (
               <TradesView trades={trades} onTradeClick={(t) => setViewingTrade(t)} onAddNew={() => setEditingTrade({})} />
             )}
             {view === 'settings' && (
               <SettingsView signalTemplate={signalTemplate} timeframeTemplate={timeframeTemplate}
+                routineTemplates={routineTemplates}
                 onUpdateSignal={updateSignalTemplate} onUpdateTimeframe={updateTimeframeTemplate}
-                trades={trades} showToast={showToast} />
+                onUpdateRoutine={updateRoutineTemplate}
+                trades={trades} routineDays={routineDays} showToast={showToast} />
             )}
           </>
         )}
       </main>
 
       <nav className="fixed bottom-0 inset-x-0 z-30 bg-[#0a0a0b]/95 backdrop-blur-xl border-t border-neutral-900">
-        <div className="max-w-xl mx-auto px-4 py-2 grid grid-cols-4 gap-1">
-          <NavBtn icon={Home} label="Dashboard" active={view === 'dashboard'} onClick={() => setView('dashboard')} />
-          <NavBtn icon={BookOpen} label="Trades" active={view === 'trades'} onClick={() => setView('trades')} />
+        <div className="max-w-xl mx-auto px-2 py-2 grid grid-cols-5 gap-1">
+          <NavBtn icon={Home} label="Home" active={view === 'dashboard'} onClick={() => setView('dashboard')} />
+          <NavBtn icon={CalendarCheck} label="Routinen" active={view === 'routines'} onClick={() => setView('routines')} />
           <button onClick={() => setEditingTrade({})} className="flex flex-col items-center justify-center py-1.5 relative group">
             <div className="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-400 to-emerald-600 flex items-center justify-center shadow-lg shadow-emerald-500/30 -mt-4 group-active:scale-95 transition-transform">
               <Plus className="w-6 h-6 text-black" strokeWidth={3} />
             </div>
-            <span className="text-[10px] font-semibold text-emerald-400 mt-0.5">Neuer Trade</span>
+            <span className="text-[9px] font-semibold text-emerald-400 mt-0.5">Trade</span>
           </button>
-          <NavBtn icon={Settings} label="Einstellungen" active={view === 'settings'} onClick={() => setView('settings')} />
+          <NavBtn icon={BookOpen} label="Trades" active={view === 'trades'} onClick={() => setView('trades')} />
+          <NavBtn icon={Settings} label="Settings" active={view === 'settings'} onClick={() => setView('settings')} />
         </div>
       </nav>
 
@@ -238,7 +352,60 @@ function NavBtn({ icon: Icon, label, active, onClick }) {
   );
 }
 
-function DashboardView({ trades, currentMonth, setCurrentMonth, onTradeClick }) {
+// ---------- Discipline stats helpers ----------
+function dayCompletionRatio(day) {
+  if (!day) return 0;
+  let total = 0, done = 0;
+  for (const key of Object.keys(ROUTINE_META)) {
+    const items = day[key] || [];
+    total += items.length;
+    done += items.filter(i => i.checked).length;
+  }
+  return total === 0 ? 0 : done / total;
+}
+
+function isDayComplete(day, threshold = 0.8) {
+  return dayCompletionRatio(day) >= threshold;
+}
+
+function calcStreak(routineDays) {
+  // Count consecutive days ending today or yesterday where threshold met
+  const today = new Date();
+  let streak = 0;
+  // Allow streak to skip today if today isn't filled yet (but yesterday was)
+  let d = new Date(today);
+  // Check if today or yesterday starts a valid streak
+  const todayKey = d.toISOString().slice(0, 10);
+  if (!isDayComplete(routineDays[todayKey])) {
+    d.setDate(d.getDate() - 1);
+  }
+  while (true) {
+    const key = d.toISOString().slice(0, 10);
+    if (isDayComplete(routineDays[key])) {
+      streak++;
+      d.setDate(d.getDate() - 1);
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+function calcMonthScore(routineDays, year, month) {
+  // Average completion ratio across all days in the month that have data
+  let sum = 0, count = 0;
+  for (const [key, day] of Object.entries(routineDays)) {
+    const d = new Date(key);
+    if (d.getFullYear() === year && d.getMonth() === month) {
+      sum += dayCompletionRatio(day);
+      count++;
+    }
+  }
+  return { avg: count > 0 ? (sum / count) * 100 : 0, days: count };
+}
+
+// ---------- Dashboard ----------
+function DashboardView({ trades, currentMonth, setCurrentMonth, onTradeClick, routineDays }) {
   const monthTrades = useMemo(() => trades.filter(t => {
     const d = new Date(t.date);
     return d.getFullYear() === currentMonth.year && d.getMonth() === currentMonth.month;
@@ -258,6 +425,9 @@ function DashboardView({ trades, currentMonth, setCurrentMonth, onTradeClick }) 
     const avgConfidence = monthTrades.length ? monthTrades.reduce((s, t) => s + (t.confidence || 0), 0) / monthTrades.length : 0;
     return { totalPnl, winrate, avgPnl, pf, wins: wins.length, losses: losses.length, total: monthTrades.length, best, worst, avgConfidence };
   }, [monthTrades]);
+
+  const streak = useMemo(() => calcStreak(routineDays), [routineDays]);
+  const monthScore = useMemo(() => calcMonthScore(routineDays, currentMonth.year, currentMonth.month), [routineDays, currentMonth]);
 
   function prevMonth() {
     setCurrentMonth(({ year, month }) => month === 0 ? { year: year - 1, month: 11 } : { year, month: month - 1 });
@@ -301,6 +471,32 @@ function DashboardView({ trades, currentMonth, setCurrentMonth, onTradeClick }) 
             <span className="text-emerald-400 flex items-center gap-1"><TrendingUp className="w-3 h-3" /> {kpis.wins}W</span>
             <span className="text-rose-400 flex items-center gap-1"><TrendingDown className="w-3 h-3" /> {kpis.losses}L</span>
             <span className="text-neutral-500">· {kpis.total} Trades</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Discipline band */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="relative overflow-hidden rounded-xl border border-amber-500/20 bg-gradient-to-br from-amber-500/5 to-neutral-900/40 p-3">
+          <div className="absolute -top-6 -right-6 w-20 h-20 rounded-full bg-amber-500/10 blur-2xl" />
+          <div className="relative">
+            <div className="flex items-center gap-1.5 text-[10px] text-amber-400 uppercase tracking-wider font-medium">
+              <Flame className="w-3 h-3" /> Streak
+            </div>
+            <div className="num text-2xl font-bold text-amber-300 mt-1">{streak}</div>
+            <div className="text-[10px] text-neutral-500 mt-0.5">{streak === 1 ? 'Tag in Folge' : 'Tage in Folge'}</div>
+          </div>
+        </div>
+        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-3">
+          <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 uppercase tracking-wider font-medium">
+            <CalendarCheck className="w-3 h-3" /> Disziplin
+          </div>
+          <div className={cn("num text-2xl font-bold mt-1",
+            monthScore.avg >= 80 ? "text-emerald-400" : monthScore.avg >= 50 ? "text-amber-400" : "text-neutral-300")}>
+            {monthScore.days > 0 ? `${fmtNum(monthScore.avg, 0)}%` : '—'}
+          </div>
+          <div className="text-[10px] text-neutral-500 mt-0.5">
+            {monthScore.days > 0 ? `Ø über ${monthScore.days} ${monthScore.days === 1 ? 'Tag' : 'Tage'}` : 'Noch keine Routine'}
           </div>
         </div>
       </div>
@@ -381,6 +577,166 @@ function KpiCard({ label, value, accent = 'neutral', icon: Icon }) {
   );
 }
 
+// ---------- Routines View ----------
+function RoutinesView({ routineTemplates, routineDays, onSaveDay }) {
+  const [selectedDate, setSelectedDate] = useState(todayISO());
+  const [expanded, setExpanded] = useState('morning'); // which section is open
+
+  if (!routineTemplates) return null;
+
+  // Get the day's state - either saved or fresh from template
+  const currentDay = useMemo(() => {
+    if (routineDays[selectedDate]) return routineDays[selectedDate];
+    return {
+      morning: routineTemplates.morning.map(i => ({ ...i, checked: false })),
+      preTrade: routineTemplates.preTrade.map(i => ({ ...i, checked: false })),
+      postTrade: routineTemplates.postTrade.map(i => ({ ...i, checked: false })),
+      evening: routineTemplates.evening.map(i => ({ ...i, checked: false })),
+    };
+  }, [selectedDate, routineDays, routineTemplates]);
+
+  function toggle(section, itemId) {
+    const newItems = currentDay[section].map(i => i.id === itemId ? { ...i, checked: !i.checked } : i);
+    const newDay = { ...currentDay, [section]: newItems };
+    onSaveDay(selectedDate, newDay);
+  }
+
+  function resetSection(section) {
+    if (!confirm(`${ROUTINE_META[section].label} für ${fmtDate(selectedDate)} zurücksetzen?`)) return;
+    const newItems = currentDay[section].map(i => ({ ...i, checked: false }));
+    const newDay = { ...currentDay, [section]: newItems };
+    onSaveDay(selectedDate, newDay);
+  }
+
+  function shiftDate(days) {
+    const d = new Date(selectedDate);
+    d.setDate(d.getDate() + days);
+    setSelectedDate(d.toISOString().slice(0, 10));
+  }
+
+  const todayRatio = dayCompletionRatio(currentDay);
+  const streak = useMemo(() => calcStreak(routineDays), [routineDays]);
+  const isToday = selectedDate === todayISO();
+
+  return (
+    <div className="space-y-4">
+      {/* Date selector */}
+      <div className="flex items-center gap-2 bg-neutral-900/60 border border-neutral-800 rounded-xl p-2">
+        <button onClick={() => shiftDate(-1)} className="p-2 rounded-lg active:bg-neutral-800 text-neutral-400">
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <div className="flex-1 text-center">
+          <div className="font-bold text-sm">{isToday ? 'Heute' : fmtDate(selectedDate)}</div>
+          <div className="text-[10px] text-neutral-500 num">{isToday && fmtDate(selectedDate)}</div>
+        </div>
+        <button onClick={() => shiftDate(1)} disabled={selectedDate >= todayISO()}
+          className="p-2 rounded-lg active:bg-neutral-800 text-neutral-400 disabled:opacity-30">
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+
+      {/* Today hero: streak + progress */}
+      <div className="relative overflow-hidden rounded-2xl border border-neutral-800 bg-gradient-to-br from-neutral-900 to-neutral-950 p-5">
+        <div className="absolute -top-12 -right-12 w-40 h-40 rounded-full bg-amber-500/10 blur-3xl" />
+        <div className="relative flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-1.5 text-[10px] text-amber-400 uppercase tracking-widest font-semibold">
+              <Flame className="w-3 h-3" /> Aktueller Streak
+            </div>
+            <div className="num text-4xl font-bold text-amber-300 mt-1 tracking-tight">{streak}</div>
+            <div className="text-[11px] text-neutral-500 mt-0.5">{streak === 1 ? 'Tag in Folge' : 'Tage in Folge'} · ≥80% nötig</div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] text-neutral-500 uppercase tracking-widest font-semibold">Dieser Tag</div>
+            <div className={cn("num text-3xl font-bold mt-1",
+              todayRatio >= 0.8 ? "text-emerald-400" : todayRatio >= 0.5 ? "text-amber-400" : "text-neutral-400")}>
+              {fmtNum(todayRatio * 100, 0)}%
+            </div>
+            <div className="h-1.5 w-24 bg-neutral-800 rounded-full overflow-hidden mt-2">
+              <div className={cn("h-full rounded-full transition-all",
+                todayRatio >= 0.8 ? "bg-emerald-400" : todayRatio >= 0.5 ? "bg-amber-400" : "bg-neutral-600")}
+                style={{ width: `${todayRatio * 100}%` }} />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 4 Routines */}
+      {Object.keys(ROUTINE_META).sort((a, b) => ROUTINE_META[a].order - ROUTINE_META[b].order).map(key => {
+        const meta = ROUTINE_META[key];
+        const items = currentDay[key] || [];
+        const checkedCount = items.filter(i => i.checked).length;
+        const ratio = items.length ? checkedCount / items.length : 0;
+        const isOpen = expanded === key;
+        const isEmpty = items.length === 0;
+        const Icon = meta.icon;
+
+        const colorMap = {
+          amber:   { text: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/30',   bar: 'bg-amber-400' },
+          sky:     { text: 'text-sky-400',     bg: 'bg-sky-500/10',     border: 'border-sky-500/30',     bar: 'bg-sky-400' },
+          emerald: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', bar: 'bg-emerald-400' },
+          violet:  { text: 'text-violet-400',  bg: 'bg-violet-500/10',  border: 'border-violet-500/30',  bar: 'bg-violet-400' },
+        };
+        const c = colorMap[meta.color];
+
+        return (
+          <div key={key} className="rounded-2xl border border-neutral-800 bg-neutral-900/40 overflow-hidden">
+            <button onClick={() => setExpanded(isOpen ? null : key)}
+              className="w-full p-4 flex items-center gap-3 active:bg-neutral-900">
+              <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", c.bg, c.border, "border")}>
+                <Icon className={cn("w-5 h-5", c.text)} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="font-bold text-sm">{meta.label}</div>
+                <div className="text-[11px] text-neutral-500 num mt-0.5">
+                  {isEmpty ? 'Leer – in Settings bearbeiten' : `${checkedCount} / ${items.length} abgehakt`}
+                </div>
+                {!isEmpty && (
+                  <div className="h-1 w-full bg-neutral-800 rounded-full overflow-hidden mt-2">
+                    <div className={cn("h-full rounded-full transition-all", c.bar)} style={{ width: `${ratio * 100}%` }} />
+                  </div>
+                )}
+              </div>
+              <ChevronRight className={cn("w-5 h-5 text-neutral-600 transition-transform", isOpen && "rotate-90")} />
+            </button>
+
+            {isOpen && !isEmpty && (
+              <div className="px-4 pb-4 space-y-1 border-t border-neutral-800 pt-3">
+                {items.map(i => (
+                  <button key={i.id} type="button" onClick={() => toggle(key, i.id)}
+                    className={cn("w-full flex items-center gap-3 p-2.5 rounded-lg text-left transition-all border",
+                      i.checked ? cn(c.bg, c.border) : "bg-neutral-900/60 border-neutral-800 active:bg-neutral-900")}>
+                    <div className={cn("w-5 h-5 rounded-md flex items-center justify-center shrink-0 border-2",
+                      i.checked ? cn(c.border.replace('/30', ''), c.bar.replace('bg-', 'bg-').replace('-400', '-500')) : "border-neutral-600")}
+                      style={i.checked ? {
+                        backgroundColor: { amber: '#f59e0b', sky: '#0ea5e9', emerald: '#10b981', violet: '#8b5cf6' }[meta.color],
+                        borderColor: { amber: '#f59e0b', sky: '#0ea5e9', emerald: '#10b981', violet: '#8b5cf6' }[meta.color],
+                      } : {}}>
+                      {i.checked && <Check className="w-3.5 h-3.5 text-black" strokeWidth={3.5} />}
+                    </div>
+                    <span className={cn("text-sm flex-1", i.checked ? "text-neutral-100" : "text-neutral-300")}>{i.label}</span>
+                  </button>
+                ))}
+                {checkedCount > 0 && (
+                  <button onClick={() => resetSection(key)}
+                    className="w-full mt-2 py-2 text-[11px] text-neutral-500 active:text-rose-400 uppercase tracking-wider font-semibold">
+                    Zurücksetzen
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <p className="text-center text-[10px] text-neutral-600 pt-2">
+        Routinen werden automatisch beim Abhaken gespeichert
+      </p>
+    </div>
+  );
+}
+
+// ---------- Profit Calendar ----------
 function ProfitCalendar({ year, month, trades, onDayClick }) {
   const tradesByDay = useMemo(() => {
     const m = new Map();
@@ -922,9 +1278,12 @@ function Stat({ label, value, color = 'neutral' }) {
   );
 }
 
-function SettingsView({ signalTemplate, timeframeTemplate, onUpdateSignal, onUpdateTimeframe, trades, showToast }) {
+function SettingsView({ signalTemplate, timeframeTemplate, routineTemplates, onUpdateSignal, onUpdateTimeframe, onUpdateRoutine, trades, routineDays, showToast }) {
   function exportData() {
-    const blob = new Blob([JSON.stringify({ trades, signalTemplate, timeframeTemplate, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify({
+      trades, signalTemplate, timeframeTemplate, routineTemplates, routineDays,
+      exportedAt: new Date().toISOString()
+    }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -936,6 +1295,7 @@ function SettingsView({ signalTemplate, timeframeTemplate, onUpdateSignal, onUpd
 
   return (
     <div className="space-y-4">
+      <h3 className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold px-1">Trade-Checklisten</h3>
       <ChecklistEditor title="Signal-Check"
         description="Items, die du bei jedem Trade prüfst (z.B. BOS, CHoCH, OB, FVG, Liquidity Sweep)"
         icon={ListChecks} items={signalTemplate} onUpdate={onUpdateSignal} />
@@ -943,11 +1303,22 @@ function SettingsView({ signalTemplate, timeframeTemplate, onUpdateSignal, onUpd
         description="Timeframe-bezogene Checks (z.B. HTF Bias, MTF Struktur, LTF Entry-Confirmation)"
         icon={Clock} items={timeframeTemplate} onUpdate={onUpdateTimeframe} />
 
+      <h3 className="text-[10px] uppercase tracking-widest text-neutral-500 font-semibold px-1 pt-3">Tages-Routinen</h3>
+      {routineTemplates && Object.keys(ROUTINE_META).sort((a, b) => ROUTINE_META[a].order - ROUTINE_META[b].order).map(key => {
+        const meta = ROUTINE_META[key];
+        return (
+          <ChecklistEditor key={key} title={meta.label}
+            description={`Routine-Items für ${meta.label}. Änderungen gelten ab neuen Tagen – vergangene Tage bleiben unverändert.`}
+            icon={meta.icon} items={routineTemplates[key]}
+            onUpdate={(items) => onUpdateRoutine(key, items)} />
+        );
+      })}
+
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-4">
         <h3 className="font-semibold text-sm mb-1 flex items-center gap-2">
           <Download className="w-4 h-4 text-emerald-400" /> Daten-Export
         </h3>
-        <p className="text-xs text-neutral-500 mb-3">Backup aller Trades + Templates als JSON-Datei herunterladen.</p>
+        <p className="text-xs text-neutral-500 mb-3">Backup aller Trades + Routinen + Templates als JSON-Datei.</p>
         <button onClick={exportData}
           className="w-full py-2.5 rounded-lg bg-neutral-800 active:bg-neutral-700 text-neutral-200 text-sm font-medium flex items-center justify-center gap-2">
           <Download className="w-4 h-4" /> Export herunterladen
